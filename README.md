@@ -1,0 +1,2 @@
+# FastIC+ library
+This C++ library is intended to simplify the development of projects with the FastIC+ chips. It contains an interface with description of all the registers accessible over I2C aswell as routines for receiving, syncing and descrambling the Aurora stream. Examples of practical use can be seen in the [FastIC+ readout](https://github.com/WojtaCZ/fastic-readout-fw) project. 
