@@ -1,156 +1,159 @@
 #include "aurora.hpp"
-//#include <iostream>
-//#include <cstdio>
-//#include <string>
 #include <bitset>
 #include <algorithm>
 #include <cstdint>
-//#include <iomanip>
+
 
 uint64_t scrambler = 0, output = 0;
 
 namespace aurora{
-    rx::rx(std::uint32_t * rxBuffer, std::size_t rxBufferSize, const int syncPacketCount, const int syncErrorTreshold) : 
+
+    /// @brief Construct the receiver with the buffer specified
+    /// @param rxBuffer Pointer to the raw data buffer with 32bit MSB unscrambled data chunks
+    /// @param rxBufferSize Size of the raw buffer
+    /// @param syncErrorTresholdPercentage The treshold (in percent) of the ratio of correct to error packets for the stream to be considered in sync
+    /// @param syncErrorSampleSize The number of data packets which will be checked to determine if they comply with the error treshold
+    rx::rx(std::uint32_t * rxBuffer, std::size_t rxBufferSize, std::uint8_t syncErrorTresholdPercentage, int syncErrorSampleSize) : 
         rxBuffer_(rxBuffer), 
-        rxBufferSize_(rxBufferSize), 
-        syncPacketCount_(syncPacketCount), 
-        syncErrorTreshold_(syncErrorTreshold)
-    { }
+        rxBufferSize_(rxBufferSize)
+    {
+        if(syncErrorTresholdPercentage > 100) syncErrorTresholdPercentage = 100;
 
+        if(rxBufferSize <= syncErrorSampleSize){
+            syncErrorSampleSize_ = rxBufferSize;
+        }else {
+            syncErrorSampleSize_ = syncErrorSampleSize;
+        }
 
-    std::uint8_t rx::getSyncBits(std::uint16_t packetIndex, std::uint8_t expectedSlip){
-        //Calculate at which index in the data array should the sync bits be
-        std::uint16_t syncIdx = (expectedSlip + 66*packetIndex) / 32;
-        //Calculate the bitshift of the sync bits in the 32bit word
-        std::uint8_t syncShift = (expectedSlip + 66*packetIndex) % 32;
-        std::uint8_t syncBits;
+        syncErrorTreshold_ = (int)((syncErrorSampleSize_ * syncErrorTresholdPercentage) / 100);
+    }
+
+    void rx::forceBitSlip(std::uint8_t bitSlip) {
+        this->bitSlip_ = bitSlip;
+    }
+
+    // Calculate the index in the data array at which the sync bits of the specified packetIndex are located
+    constexpr int rx::getSyncIndex(int packetIndex){
+        return (this->bitSlip_ + (66 * packetIndex)) / 32;
+    }
+
+    // Calculate the bitshift of the sync bits of the specified packetIndex
+    constexpr std::uint8_t rx::getSyncShift(int packetIndex){
+        return (this->bitSlip_ + (66 * packetIndex)) % 32;
+    }
+
+    std::uint8_t rx::getSyncBits(int packetIndex){
+        int syncIndex = getSyncIndex(packetIndex);
+        std::uint8_t syncShift = getSyncShift(packetIndex);
+
+        std::uint8_t syncBits = 0;
         
         if(syncShift != 31){
-            //Separate the sync bits
-            syncBits = (rxBuffer_[syncIdx] & (0xC0000000 >> syncShift)) >> (30 - syncShift);
+            // This is the special case where the sync bits are split between the two 32bit data words -> join them
+            syncBits = ((rxBuffer_[syncIndex] & 0x00000001) << 1) | ((rxBuffer_[syncIndex+1] & 0x80000000) >> 31);
         }else{
-            //The bits are split in the two packets
-            syncBits = ((rxBuffer_[syncIdx] & 0x00000001) << 1) | ((rxBuffer_[syncIdx+1] & 0x80000000) >> 31);
+             // This is the most usual case where the bits are in one data word -> just mask them
+            syncBits = (rxBuffer_[syncIndex] & (0xC0000000 >> syncShift)) >> (30 - syncShift);
         }
 
         return syncBits;
     }
 
-    std::uint8_t rx::calculateBitSlip(){ 
-        //Number of packets to go through when calculating BER
-        constexpr auto BER_PACKET_COUNT = 64;
-        //After how many correct packets should the bitslip be considered in sync
-        constexpr auto SYNC_ERROR_TRESHOLD = 50;
+    // Check if the sync bits at the specified position are valid
+    bool rx::hasValidSync(int packetIndex){
+        // Get the sync bits
+        std::uint8_t syncBits = getSyncBits(packetIndex);
 
-        static_assert(unsigned(SYNC_ERROR_TRESHOLD) > 5, "Error treshold too low! This will lead to fake syncs. Decrease the treshold for more reliable sync.");
-
-        //Counter for valid packets
-        std::uint8_t validCounter;
+        // If the sync bits are incorrect, return false
+        if(syncBits == 0b00) return false;
+        if(syncBits == 0b11) return false;
         
-        //Test all the possible bitslips
-        for(std::uint8_t slip = 0; slip < 64; slip++){
-            //Check the first 5 packets for validity (this usually gets rid of most of the fake syncs)
-            if(validateSync(0, slip) && validateSync(1, slip) && validateSync(2, slip) && validateSync(3, slip) && validateSync(4, slip)){
-                //If sync candidates were acquired, check their BER
-                validCounter = 5;
-                //Go through all the packet with the selected slip
-                for(int packet = 5; packet < BER_PACKET_COUNT; packet++){
+        // Otherwise, return true
+        return true;
+    }
+
+
+    bool rx::synchronize(){ 
+        // Counter for valid packets
+        int validPacketCounter;
+        
+        // Go through all the possible bitslips
+        for(std::uint8_t bitSlip = 0; bitSlip < 64; bitSlip++){
+            // Force the selected bit slip
+            forceBitSlip(bitSlip);
+            // Check the first 5 packets for validity (this usually gets rid of most of the fake syncs)
+            if(hasValidSync(0) && hasValidSync(1) && hasValidSync(2) && hasValidSync(3) && hasValidSync(4)){
+                // If sync candidate was acquired, check if it suffices the sync error treshold
+                validPacketCounter = 5;
+                // Go through all the packets with the selected slip
+                for(int packetIndex = 5; packetIndex < syncErrorSampleSize_; packetIndex++){
                     //Count how many of them were valid
-                    if(validateSync(packet, slip)){
-                        validCounter++;
-                        //If the BER was good enough, return the slip value
-                        if(validCounter > SYNC_ERROR_TRESHOLD) return slip;
+                    if(hasValidSync(packetIndex)){
+                        validPacketCounter++;
+                        //If the ratio of good to error packets suffices, return the bit slip
+                        if(validPacketCounter >= syncErrorTreshold_){
+                            this->bitSlip_ = bitSlip;
+                            this->synced_ = true;
+                            return true;
+                        }
                     }
                 }
             }
         }
         
-        return -1;
+        // Otherwise return false
+        return false;
     }
 
-     std::uint8_t rx::calculateBitSlipTest(){ 
-       
-
-        //Counter for valid packets
-        int valids[64];
-        int validCounter = 0, validCounterMax = -1;
-        std::uint8_t max = 0;
-        
-        //Test all the possible bitslips
-        for(std::uint8_t slip = 0; slip < 64; slip++){
-            //Check the first 5 packets for validity (this usually gets rid of most of the fake syncs)
-                for(int packet = 0; packet < (rxBufferSize_*32)/66 - 1; packet++){
-                    //Count how many of them were valid
-                    if(validateSync(packet, slip)){
-                        validCounter++;
-                    }
-                }
-                
-
-                if(validCounter >= validCounterMax){  //// CHANGE THIS!!!!
-                    max = slip;
-                    validCounterMax = validCounter;
-                }
-                //std::cout << "Valid packets for slip " << std::dec << std::setw(6) << std::setfill(' ') << unsigned(slip) << " are " << std::dec << std::setw(6) << std::setfill(' ') << unsigned(validCounter) << std::endl;
-                valids[slip] = validCounter;
-                validCounter = 0;
-                
-        }
-
-
-        return max;
-    }
-
-    //Validate the sync bytes at specified position
-    bool rx::validateSync(std::uint16_t packetIndex, std::uint8_t expectedSlip){
-        //Calculate at which index in the data array should the sync bits be
-        std::uint16_t syncIdx = (expectedSlip + 66*packetIndex) / 32;
-        //Calculate the bitshift of the sync bits in the 32bit word
-        std::uint8_t syncShift = (expectedSlip + 66*packetIndex) % 32;
-        //Separate the sync bits
-        std::uint8_t syncBits = getSyncBits(packetIndex, expectedSlip);
-
-        //If the sync bits are incorrect, return false
-        if(syncBits == 0b00) return false;
-        if(syncBits == 0b11) return false;
-        
-        return true;
-    }
-
-    //Try to sync the receiver to the data stream
-    bool rx::trySync(){
-        //Figure out the bitslip
-        //this->bitSlip_ = calculateBitSlip();
-        this->bitSlip_ = calculateBitSlipTest();
-        
-        //If the sync headers were detected, flag sync
-        if(this->bitSlip_ != 255){
-            this->synced_ = true;
-            this->berCounter_ = 0;
-        }else{
-            this->synced_ = false;
-        }
-
-        return this->synced_;
-    }
-
-    //Return the current bitslip
+    // Return the current bitslip
     std::uint8_t rx::getBitSlip(){
         return this->bitSlip_;
     }
 
-    //Return the overall BER of the receiver
-    float rx::getBER(){
-        return berCounter_;
+    std::uint64_t rx::getPacketData(int packetIndex){
+        int syncIndex = getSyncIndex(packetIndex);
+        std::uint8_t syncShift = getSyncShift(packetIndex);
+
+        std::uint64_t data;
+
+        // Reconstruct the packet data
+        if(syncShift == 31){
+            data = 0
+                   | ((std::uint64_t)(rxBuffer_[syncIndex+1] & 0x7FFFFFFF) << 33)
+                   | ((std::uint64_t) rxBuffer_[syncIndex+2]               << 1)
+                   | ((std::uint64_t)(rxBuffer_[syncIndex+3] & 0x80000000) >> 31);
+        }else{
+            data = 0
+                 | ((std::uint64_t)((rxBuffer_[syncIndex]     & (0x3FFFFFFF >> syncShift)))           << (32 + syncShift + 2))
+                 | ((std::uint64_t)  rxBuffer_[syncIndex+1])                                          << (syncShift + 2)
+                 | ((std::uint64_t)((rxBuffer_[syncIndex+2]   & (0xFFFFFFFF << (30 - syncShift))))    >> (30 - syncShift));
+        }
+
+        return data;
     }
 
-    packet rx::getPacket(bool autoIncrement){
-        //Calculate at which index in the data array should the sync bits be
-        std::uint16_t syncIdx = (this->bitSlip_ + 66*this->packetIdx_) / 32;
-        //Calculate the bitshift of the sync bits in the 32bit word
-        std::uint8_t syncShift = (this->bitSlip_ + 66*this->packetIdx_) % 32;
-        //Get the synchronization bits
-        std::uint8_t syncBits = getSyncBits(this->packetIdx_, this->bitSlip_);
+    std::uint64_t rx::descramblePacketData(std::uint64_t currentData, std::uint64_t previousData){
+        output = 0;
+
+        for(int i = 63; i >= 0; i--){
+            uint8_t newBit = ((currentData >> i) & 1);
+            //Shift the latest bit to the scrambler buffer
+            previousData <<= 1;
+            previousData |= newBit;
+            output |= ((previousData >> 0) & 1) ^ ((previousData >> 39) & 1) ^ ((previousData >> 58) & 1);
+            
+            
+            if(i != 0) output <<= 1;
+
+        }
+
+        return output;
+
+    }
+
+   /* packet rx::getPacket(){
+        // Get the sync bits of the packet
+        std::uint8_t syncBits = getSyncBits(packetIndex);
 
         //Sort out the packet type
         packet::type packetType;
@@ -163,21 +166,7 @@ namespace aurora{
             packetType = packet::type::error;
         }
 
-        std::uint64_t data;
-
-        //Reconstruct the packet data
-        if(syncShift == 31){
-            //If the bitslip is 31 its a special case
-            data = 0
-                   | ((std::uint64_t)(rxBuffer_[syncIdx+1] & 0x7FFFFFFF) << 33)
-                   | ((std::uint64_t) rxBuffer_[syncIdx+2]               << 1)
-                   | ((std::uint64_t)(rxBuffer_[syncIdx+3] & 0x80000000) >> 31);
-        }else{
-            data = 0
-                 | ((std::uint64_t)((rxBuffer_[syncIdx]     & (0x3FFFFFFF >> syncShift)))           << (32 + syncShift + 2))
-                 | ((std::uint64_t)  rxBuffer_[syncIdx+1])                                          << (syncShift + 2)
-                 | ((std::uint64_t)((rxBuffer_[syncIdx+2]   & (0xFFFFFFFF << (30 - syncShift))))    >> (30 - syncShift));
-        }
+        std::uint64_t data = getPacketData(packetIndex);
 
         output = 0;
 
@@ -194,12 +183,12 @@ namespace aurora{
 
         
 
-        if(autoIncrement) this->packetIdx_++;
+         this->packetIdx_++;
 
         return packet(packetType, data);
 
-    }
-
+    }*/
+/*
     void rx::processBuffer(bool discardControl){
         //Clear the buffer
         packetBuffer_.clear();
@@ -223,7 +212,7 @@ namespace aurora{
 
         //Divide the error frames by the number of frames received
         berCounter_ /= (treshold + 1);
-    }
+    }*/
 
     //Return the reference to the internal buffer
     const std::vector<packet> & rx::getPacketBuffer() const{

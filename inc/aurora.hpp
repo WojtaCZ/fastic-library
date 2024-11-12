@@ -10,9 +10,10 @@ namespace aurora{
 
     class rx
     {
-        private:
+        public:
             //Signal if the receiver has acquired sync
             bool synced_ = false;
+
             //What is the bitslip needed to get to sync
             std::uint8_t bitSlip_ = 0;
 
@@ -26,30 +27,41 @@ namespace aurora{
             //Buffer of received packets
             std::vector<packet> packetBuffer_;
 
-            //Calculate the bit slip from the stream
-            std::uint8_t calculateBitSlip();
-            bool validateSync(std::uint16_t packetIndex, std::uint8_t expectedSlip);
-            std::uint8_t getSyncBits(std::uint16_t packetIndex, std::uint8_t expectedSlip);
 
-            const int syncPacketCount_;
-            const int syncErrorTreshold_;
+            bool hasValidSync(int packetIndex);
+            
+            std::uint64_t getPacketData(int packetIndex);
+            std::uint64_t descramblePacketData(std::uint64_t currentData, std::uint64_t previousData);
+            packet getPacket();
+            packet getPacket(int index);
 
-            //Counter to keep the overall ber of the receiver
-            float berCounter_ = 0;
+            // Calculate the index in the data array at which the sync bits of the specified packetIndex are located
+            constexpr int getSyncIndex(int packetIndex);
+            // Calculate the bitshift of the sync bits of the specified packetIndex
+            constexpr std::uint8_t getSyncShift(int packetIndex);
+            // Get the synchronization bits value for the specified packet 
+            std::uint8_t getSyncBits(int packetIndex);
 
-        public:
-            std::uint8_t calculateBitSlipTest();
-            rx(std::uint32_t * rxBuffer, std::size_t rxBufferSize, const int syncPacketCount = 64, const int syncErrorTreshold = 40);
-            //~rx();
+            // Force the selected value of bitslip, this value persist until a sync attempt is executed
+            void forceBitSlip(std::uint8_t bitSlip);
 
-            bool trySync();
+            int syncErrorTreshold_;
+            int syncErrorSampleSize_;
+
+
+        //public:
+            rx(std::uint32_t * rxBuffer, std::size_t rxBufferSize, std::uint8_t syncErrorTresholdPercentage = 90, int syncErrorSampleSize = 64);
+
+            void setRxBuffer(std::uint32_t * rxBuffer, std::size_t rxBufferSize);
+            void processRxBuffer(bool discardControl = false);
+
+            bool synchronize();
             bool isSynchronized();
 
-            void processBuffer(bool discardControl = false);
-            std::uint8_t getBitSlip();
-            packet getPacket(bool autoIncrement);
-            float getBER();
+            
             const std::vector<packet> & getPacketBuffer() const;
+
+            std::uint8_t getBitSlip();
     };
 
     class packet
@@ -100,7 +112,6 @@ namespace aurora{
 
         public:
             controlPacket(btf packetBtf, std::uint64_t packetData);
-            //~controlPacket();
             btf getBtf();
     };   
 }
