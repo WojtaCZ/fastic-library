@@ -31,7 +31,7 @@ namespace aurora{
             bool hasValidSync(int packetIndex);
             
             std::uint64_t getPacketData(int packetIndex);
-            std::uint64_t descramblePacketData(std::uint64_t currentData, std::uint64_t previousData);
+            std::uint64_t descramblePacketData(std::uint64_t & currentData, std::uint64_t previousData);
             packet getPacket();
             packet getPacket(int index);
 

@@ -3,9 +3,6 @@
 #include <algorithm>
 #include <cstdint>
 
-
-uint64_t scrambler = 0, output = 0;
-
 namespace aurora{
 
     /// @brief Construct the receiver with the buffer specified
@@ -48,7 +45,7 @@ namespace aurora{
 
         std::uint8_t syncBits = 0;
         
-        if(syncShift != 31){
+        if(syncShift == 31){
             // This is the special case where the sync bits are split between the two 32bit data words -> join them
             syncBits = ((rxBuffer_[syncIndex] & 0x00000001) << 1) | ((rxBuffer_[syncIndex+1] & 0x80000000) >> 31);
         }else{
@@ -132,17 +129,19 @@ namespace aurora{
         return data;
     }
 
-    std::uint64_t rx::descramblePacketData(std::uint64_t currentData, std::uint64_t previousData){
-        output = 0;
+    std::uint64_t rx::descramblePacketData(std::uint64_t & currentData, std::uint64_t previousData){
+        uint64_t output = 0;
+
+
+        
 
         for(int i = 63; i >= 0; i--){
-            uint8_t newBit = ((currentData >> i) & 1);
+            previousData = (previousData << 1) | ((currentData >> i) & 1);
             //Shift the latest bit to the scrambler buffer
-            previousData <<= 1;
-            previousData |= newBit;
-            output |= ((previousData >> 0) & 1) ^ ((previousData >> 39) & 1) ^ ((previousData >> 58) & 1);
-            
-            
+            uint64_t mask = (currentData >> i);
+            //currentData = currentData & ~(1 << i);
+            //currentData = (currentData & ~((uint64_t)(0x8000000000000000 >> i)));
+            output |= (((previousData >> 0) & 1) ^ ((previousData >> 39) & 1) ^ ((previousData >> 58) & 1));
             if(i != 0) output <<= 1;
 
         }
