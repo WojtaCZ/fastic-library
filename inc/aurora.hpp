@@ -26,12 +26,12 @@ namespace aurora{
 
             //Buffer of received packets
             std::vector<packet> packetBuffer_;
-
+            std::uint32_t berCounter_;
 
             bool hasValidSync(int packetIndex);
             
             std::uint64_t getPacketData(int packetIndex);
-            std::uint64_t descramblePacketData(std::uint64_t & currentData, std::uint64_t previousData);
+            void descramblePacketData(std::uint64_t & currentData, std::uint64_t previousData);
             packet getPacket();
             packet getPacket(int index);
 
@@ -67,28 +67,6 @@ namespace aurora{
     class packet
     {
         public:
-            enum class type{
-                data = 0b01,    //Data frame preamble
-                control = 0b10,  //Control frame preamble
-                error
-            };
-
-        private:
-            type packetType_;
-            std::uint64_t packetData_;
-        public:
-            packet(type packetType, std::uint64_t packetData);
-            //~packet();
-            type getType();
-            std::uint64_t getData();
-    };
-
-    class dataPacket : public packet{
-
-    };
-
-    class controlPacket : public packet{
-        public:
             enum class btf{
                 idle = 0x78,    //Idle, not ready or clock compensation
                 nfc = 0xaa,     //Native Flow Control
@@ -107,13 +85,44 @@ namespace aurora{
                 res = 0xff      //Reserved
             };
 
-        private:
-            btf packetBtf_;
+            struct idle {
+                std::uint64_t raw_ : 56;
+                bool sa : 1;
+                bool nr : 1;
+                bool cb : 1;
+                bool cc : 1;
+                btf btf : 8;
+            };
 
-        public:
-            controlPacket(btf packetBtf, std::uint64_t packetData);
-            btf getBtf();
-    };   
+            struct nfc {
+                std::uint64_t raw_ : 47;
+                bool xoff : 1;
+                std::uint8_t pause : 8;
+                btf btf : 8;
+            };
+
+            struct generic {
+                std::uint64_t raw_ : 56;
+                btf btf : 8;
+            };
+
+            union fields {
+                struct idle idle;
+                struct nfc nfc;
+                struct generic generic;
+            };
+            
+            enum class type {
+                data = 0b01,    // Data frame preamble
+                control = 0b10,  // Control frame preamble
+                error
+            } type;
+
+            union {
+                std::uint64_t data;
+                fields fields;
+            };
+    };
 }
 
 #endif

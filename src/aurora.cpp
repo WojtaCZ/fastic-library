@@ -129,110 +129,76 @@ namespace aurora{
         return data;
     }
 
-    std::uint64_t rx::descramblePacketData(std::uint64_t & currentData, std::uint64_t previousData){
-        uint64_t output = 0;
-
-
-        
-
+    void rx::descramblePacketData(std::uint64_t & currentData, std::uint64_t previousData){
         for(int i = 63; i >= 0; i--){
+            // Shift back the new bit to the previous buffer
             previousData = (previousData << 1) | ((currentData >> i) & 1);
-            //Shift the latest bit to the scrambler buffer
-            uint64_t mask = (currentData >> i);
-            //currentData = currentData & ~(1 << i);
-            //currentData = (currentData & ~((uint64_t)(0x8000000000000000 >> i)));
-            output |= (((previousData >> 0) & 1) ^ ((previousData >> 39) & 1) ^ ((previousData >> 58) & 1));
-            if(i != 0) output <<= 1;
-
+            // Clean out a bit in the current data buffer and replace it with the descrambled one
+            currentData = (currentData & ~((std::uint64_t)1 << i)) |
+                          ((std::uint64_t)(((previousData >> 0) & 1) ^ ((previousData >> 39) & 1) ^ ((previousData >> 58) & 1)) << i);
         }
-
-        return output;
-
     }
 
-   /* packet rx::getPacket(){
-        // Get the sync bits of the packet
-        std::uint8_t syncBits = getSyncBits(packetIndex);
+    packet rx::getPacket(){
+        return getPacket(packetIdx_);
+    }
 
-        //Sort out the packet type
-        packet::type packetType;
+    packet rx::getPacket(int index){
+        // Get the sync bits of the packet
+        std::uint8_t syncBits = getSyncBits(index);
+
+        // Create a packet
+        packet p;
 
         if(syncBits == 0b01){
-            packetType = packet::type::data;
+            p.type = packet::type::data;
         }else if(syncBits == 0b10){
-            packetType = packet::type::control;
+            p.type = packet::type::control;
         }else{
-            packetType = packet::type::error;
+            p.type = packet::type::error;
         }
 
-        std::uint64_t data = getPacketData(packetIndex);
-
-        output = 0;
-
-        for(int i = 63; i >= 0; i--){
-            uint8_t newBit = ((data >> i) & 1);
-            //Shift the latest bit to the scrambler buffer
-            scrambler |= newBit;
-            output |= ((scrambler >> 0) & 1) ^ ((scrambler >> 39) & 1) ^ ((scrambler >> 58) & 1);
-            
-            scrambler <<= 1;
-            if(i != 0) output <<= 1;
+        if(index != 0){
+            p.data = getPacketData(index);
+            descramblePacketData(p.data, getPacketData(index - 1));
+        }else {
 
         }
 
-        
+        index++;
 
-         this->packetIdx_++;
+        return p;
+    }
 
-        return packet(packetType, data);
-
-    }*/
-/*
-    void rx::processBuffer(bool discardControl){
-        //Clear the buffer
+    void rx::processRxBuffer(bool discardControl){
+        //Clear the buffer and zero out BER
         packetBuffer_.clear();
-        this->packetIdx_ = 0;
+        packetIdx_ = 0;
+        berCounter_ = 0;
 
-        std::uint16_t treshold = 0;
+        std::uint16_t maxIndex = 0;
 
         //If there is no bitslip, one more packet can be read
         if(bitSlip_){
-            treshold = (rxBufferSize_*32)/66 - 1;
-        }else treshold = (rxBufferSize_*32)/66;
+            maxIndex = (rxBufferSize_*32)/66 - 1;
+        }else maxIndex = (rxBufferSize_*32)/66;
         
         //Go through the buffer and retreive all available packets
-        for(int idx = 0; idx < treshold; idx++){
+        for(int idx = 0; idx < maxIndex; idx++){
             packet p = getPacket(true);
-            if(p.getType() == packet::type::error) berCounter_++;
-            if(!(discardControl && p.getType() == packet::type::control)){
+            if(p.type == packet::type::error) berCounter_++;
+            if(!(discardControl && p.type == packet::type::control)){
                 packetBuffer_.push_back(p);
             } 
         }
 
         //Divide the error frames by the number of frames received
-        berCounter_ /= (treshold + 1);
-    }*/
+        berCounter_ = (berCounter_ * 100) / (maxIndex + 1);
+    }
 
     //Return the reference to the internal buffer
     const std::vector<packet> & rx::getPacketBuffer() const{
         return packetBuffer_;
     }
-
-    //Packet constructor
-    packet::packet(type packetType, std::uint64_t packetData) : 
-        packetType_(packetType), 
-        packetData_(packetData)
-    { }
-
-    //Return the packet type
-    packet::type packet::getType(){
-        return packetType_;
-    }
-
-    //Return the packet data
-    std::uint64_t packet::getData(){
-        return packetData_;
-    }   
-
     
 }
