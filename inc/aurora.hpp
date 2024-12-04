@@ -101,14 +101,34 @@ namespace aurora{
                 btf btf : 8;
             };
 
+            struct ufc {
+                std::uint64_t data : 48;
+                std::uint8_t size : 8;
+                btf btf : 8;
+            };
+
+            struct separator7 {
+                std::uint64_t data : 56;
+                btf btf : 8;
+            };
+
+            struct separator {
+                std::uint64_t data : 48;
+                std::uint8_t size : 8;
+                btf btf : 8;
+            };
+
             struct generic {
-                std::uint64_t raw_ : 56;
+                std::uint64_t data : 56;
                 btf btf : 8;
             };
 
             union fields {
                 struct idle idle;
+                struct ufc ufc;
                 struct nfc nfc;
+                struct separator separator;
+                struct separator7 separator7;
                 struct generic generic;
             };
             
